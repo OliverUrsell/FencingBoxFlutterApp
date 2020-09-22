@@ -12,6 +12,7 @@ class MQTThelper{
 
   final Function onConnected;
   final Function onConnectionFailed;
+  final Function onDisconnect;
   List<Function> onMessageReceived;
   final String brokerAddress;
   MqttServerClient _client;
@@ -20,7 +21,8 @@ class MQTThelper{
     @required this.onConnected,
     @required this.onConnectionFailed,
     @required this.onMessageReceived,
-    @required this.brokerAddress
+    @required this.brokerAddress,
+    @required this.onDisconnect
   }){
     _client = MqttServerClient(brokerAddress, '');
     this.connect();
@@ -97,6 +99,7 @@ class MQTThelper{
   /// The unsolicited disconnect callback
   void onDisconnected() {
     print('OnDisconnected client callback - Client disconnection');
+    onDisconnect();
   }
 
   void disconnect() {

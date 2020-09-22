@@ -1,6 +1,6 @@
 # fencingboxapp
 
-An app for usage with the wireless enabled fencing box.
+An app for controlling the fencing box.
 
 ## Getting Started
 

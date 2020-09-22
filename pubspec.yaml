@@ -1,5 +1,5 @@
 name: fencingboxapp
-description: An app for usage with the wireless enabled fencing box.
+description: An app for controlling the fencing box.
 
 # The following line prevents the package from being accidentally published to
 # pub.dev using `pub publish`. This is preferred for private packages.
@@ -21,6 +21,8 @@ environment:
   sdk: ">=2.7.0 <3.0.0"
 
 dependencies:
+  wakelock: ^0.1.4+1
+  vibration: ^1.4.0
   mqtt_client: ^7.2.1
   flutter:
     sdk: flutter

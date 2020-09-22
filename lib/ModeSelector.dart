@@ -39,7 +39,7 @@ class _ModeSelectorState extends State<ModeSelector> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Select Mode")),
+//      appBar: AppBar(title: Text("Select Mode")),
       body: Column(
         children: <Widget>[
           Row(

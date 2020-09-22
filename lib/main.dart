@@ -1,7 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:vibration/vibration.dart';
 import 'package:fencingboxapp/MQTThelper.dart';
 import 'ModeSelector.dart';
+import 'package:wakelock/wakelock.dart';
 
 void main() {
   runApp(MyApp());
@@ -11,6 +14,15 @@ class MyApp extends StatelessWidget {
   // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
+
+    // Disable screen going to sleep
+    Wakelock.enable();
+
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
@@ -61,6 +73,16 @@ class _MyHomePageState extends State<MyHomePage> {
   bool connected = false;
   bool failed = false;
 
+  int _navBarIndex = 0;
+
+  String matchMode = "None";
+
+  final List<int> leftMatchOrder = [3,2,1,3,2,1,3,2,1];
+  final List<int> rightMatchOrder = [2,1,3,1,3,2,3,2,1];
+  int currentMatch = 0;
+  List<String> leftNames = ["", "", ""];
+  List<String> rightNames = ["", "", ""];
+
   @override
   void initState() {
     super.initState();
@@ -73,7 +95,7 @@ class _MyHomePageState extends State<MyHomePage> {
       failed = false;
     });
     mqtt = new MQTThelper(
-        brokerAddress: "test.mosquitto.org",//"192.168.4.1",
+        brokerAddress: "192.168.4.1", //"test.mosquitto.org",
         onConnected: () {
           setState(() {
             connected = true;
@@ -88,11 +110,19 @@ class _MyHomePageState extends State<MyHomePage> {
             failed = true;
           });
         },
+        onDisconnect: () {
+          setState(() {
+            tryConnection();
+          });
+        },
         onMessageReceived: [(String topic, String payload) {
           setState(() {
             switch (topic) {
               case "/clock":
                 time = int.parse(payload);
+                if(time <= 0) {
+                  _timerFinished();
+                }
                 break;
               case "/clock/control":
                 clockOn = payload == "true";
@@ -121,6 +151,11 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         mqtt.publish("/red", value.toString());
         _redScore = value;
+        if(matchMode == "Team Match"){
+          if(_redScore == (currentMatch + 1)*5){
+            showNextMatchDialog();
+          }
+        }
       });
     }
 
@@ -128,39 +163,297 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         mqtt.publish("/green", value.toString());
         _greenScore = value;
+        if(matchMode == "Team Match"){
+          if(_greenScore == (currentMatch + 1)*5){
+            showNextMatchDialog();
+          }
+        }
       });
     }
 
     if (connected) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        appBar: AppBar(
-          title: Text("The Fencing Box"),
-          actions: <Widget>[
-            FlatButton(
-              child: Text("Change Mode",
-                style: TextStyle(color: Colors.white),
+      Widget appBarTitle;
+      Expanded centralColumn;
+      if(matchMode == "Team Match"){
+        centralColumn = Expanded(
+          child: Column(
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Container(
+                    width: 30,
+                    child: IconButton(
+                      icon: Icon(Icons.chevron_left),
+                      color: Colors.grey,
+                      onPressed: () {
+                        if(currentMatch > 0) {
+                          setState(() {
+                            previousRound();
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                  Text(
+                    "${currentMatch + 1} / ${leftMatchOrder.length}",
+                    style: TextStyle(
+                      fontSize: 28,
+                      color: Colors.white,
+                    ),
+                    overflow: TextOverflow.visible,
+                  ),
+                  Container(
+                    width: 30,
+                    child: IconButton(
+                      icon: Icon(Icons.chevron_right),
+                      color: Colors.grey,
+                      onPressed: () {
+                        if (currentMatch < 8) {
+                          setState(() {
+                            nextRound();
+                          });
+                        }
+                      },
+
+                    ),
+                  )
+                ],
               ),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (context) => ModeSelector(mqtt: this.mqtt)),
-                );
-              },
-            )
-          ],
-        ),
-        body: Center(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.all(15.0),
+              Text(
+                "${time ~/ 60}:${displayIntWithTwoPlaces(
+                    time % 60)}",
+                style: TextStyle(
+                  fontSize: 50,
+                  color: Colors.white,
+                ),
+                overflow: TextOverflow.visible,
+              ),
+              RaisedButton(
+                onPressed: () {
+                  showModalBottomSheet(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return Container(
+                          color: Colors.grey[400],
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment
+                                .center,
+                            children: <Widget>[
+                              RaisedButton(
+                                child: Text("Reset Just Scores"),
+                                onPressed: () {
+                                  setRedScore(0);
+                                  setGreenScore(0);
+                                  mqtt.publish(
+                                      "/clock/control", "false");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              RaisedButton(
+                                child: Text("Reset Just Time"),
+                                onPressed: () {
+                                  mqtt.publish(
+                                      "/general", "resetTime");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              RaisedButton(
+                                child: Text(
+                                    "Reset Scores and Time"),
+                                onPressed: () {
+                                  setRedScore(0);
+                                  setGreenScore(0);
+                                  mqtt.publish(
+                                      "/general", "resetTime");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment
+                                    .center,
+                                children: <Widget>[
+                                  RaisedButton(
+                                    child: Text("Reset Time -"),
+                                    onPressed: () {
+                                      setRedScore(0);
+                                      setGreenScore(0);
+                                      mqtt.publish(
+                                          "/general", "resetTime-");
+                                      Navigator.pop(context);
+                                    },
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets
+                                        .fromLTRB(8, 0, 0, 0),
+                                    child: RaisedButton(
+                                      child: Text("Reset Time +"),
+                                      onPressed: () {
+                                        setRedScore(0);
+                                        setGreenScore(0);
+                                        mqtt.publish(
+                                            "/general",
+                                            "resetTime+");
+                                        Navigator.pop(context);
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              )
+                            ],
+                          ),
+                        );
+                      });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                  child: Text(
+                    "Reset",
+                    style: TextStyle(fontSize: 24),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }else{
+        centralColumn = Expanded(
+          child: Column(
+            children: <Widget>[
+              Text(
+                "${time ~/ 60}:${displayIntWithTwoPlaces(
+                    time % 60)}",
+                style: TextStyle(
+                  fontSize: 50,
+                  color: Colors.white,
+                ),
+                overflow: TextOverflow.visible,
+              ),
+              RaisedButton(
+                onPressed: () {
+                  showModalBottomSheet(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return Container(
+                          color: Colors.grey[400],
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment
+                                .center,
+                            children: <Widget>[
+                              RaisedButton(
+                                child: Text("Reset Just Scores"),
+                                onPressed: () {
+                                  setRedScore(0);
+                                  setGreenScore(0);
+                                  mqtt.publish(
+                                      "/clock/control", "false");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              RaisedButton(
+                                child: Text("Reset Just Time"),
+                                onPressed: () {
+                                  mqtt.publish(
+                                      "/general", "resetTime");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              RaisedButton(
+                                child: Text(
+                                    "Reset Scores and Time"),
+                                onPressed: () {
+                                  setRedScore(0);
+                                  setGreenScore(0);
+                                  mqtt.publish(
+                                      "/general", "resetTime");
+                                  Navigator.pop(context);
+                                },
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment
+                                    .center,
+                                children: <Widget>[
+                                  RaisedButton(
+                                    child: Text("Reset Time -"),
+                                    onPressed: () {
+                                      setRedScore(0);
+                                      setGreenScore(0);
+                                      mqtt.publish(
+                                          "/general", "resetTime-");
+                                      Navigator.pop(context);
+                                    },
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets
+                                        .fromLTRB(8, 0, 0, 0),
+                                    child: RaisedButton(
+                                      child: Text("Reset Time +"),
+                                      onPressed: () {
+                                        setRedScore(0);
+                                        setGreenScore(0);
+                                        mqtt.publish(
+                                            "/general",
+                                            "resetTime+");
+                                        Navigator.pop(context);
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              )
+                            ],
+                          ),
+                        );
+                      });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
+                  child: Text(
+                    "Reset",
+                    style: TextStyle(fontSize: 24),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, 20, 0, 3),
+                child: Container(
+                  decoration: BoxDecoration(
+                      border: Border.all(color: Colors.amber)),
+                  child: FlatButton(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                          0, 25, 0, 25),
+                      child: Text(
+                        "Pause",
+                        style:
+                        TextStyle(
+                            fontSize: 24, color: Colors.amber),
+                      ),
+                    ),
+                    onPressed: () {
+                      mqtt.publish("/general", "pause");
+                    },
+                  ),
+                ),
+              )
+            ],
+          ),
+        );
+      }
+      Widget appBody;
+
+      switch(_navBarIndex){
+        case 0:
+          appBarTitle = Text("The Fencing Box");
+          appBody = Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Flex(
+                direction: Axis.horizontal,
+                children: <Widget>[
+
+                  //Red Score
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 0),
                       child: Column(
                         children: <Widget>[
                           Container(
@@ -177,7 +470,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           ),
                           Text("$_redScore",
                               style: TextStyle(
-                                  fontSize: 100, color: Colors.red)),
+                                  fontSize: 97, color: Colors.red)),
                           Container(
                             height: 100,
                             width: 100,
@@ -193,129 +486,15 @@ class _MyHomePageState extends State<MyHomePage> {
                         ],
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: <Widget>[
-                          Text(
-                            "${time ~/ 60}:${displayIntWithTwoPlaces(
-                                time % 60)}",
-                            style: TextStyle(
-                              fontSize: 50,
-                              color: Colors.white,
-                            ),
-                          ),
-                          RaisedButton(
-                            onPressed: () {
-                              showModalBottomSheet(
-                                  context: context,
-                                  builder: (BuildContext context) {
-                                    return Container(
-                                      color: Colors.grey[400],
-                                      child: Column(
-                                        mainAxisAlignment: MainAxisAlignment
-                                            .center,
-                                        children: <Widget>[
-                                          RaisedButton(
-                                            child: Text("Reset Just Scores"),
-                                            onPressed: () {
-                                              setRedScore(0);
-                                              setGreenScore(0);
-                                              mqtt.publish(
-                                                  "/clock/control", "false");
-                                              Navigator.pop(context);
-                                            },
-                                          ),
-                                          RaisedButton(
-                                            child: Text("Reset Just Time"),
-                                            onPressed: () {
-                                              mqtt.publish(
-                                                  "/general", "resetTime");
-                                              Navigator.pop(context);
-                                            },
-                                          ),
-                                          RaisedButton(
-                                            child: Text(
-                                                "Reset Scores and Time"),
-                                            onPressed: () {
-                                              setRedScore(0);
-                                              setGreenScore(0);
-                                              mqtt.publish(
-                                                  "/general", "resetTime");
-                                              Navigator.pop(context);
-                                            },
-                                          ),
-                                          Row(
-                                            mainAxisAlignment: MainAxisAlignment
-                                                .center,
-                                            children: <Widget>[
-                                              RaisedButton(
-                                                child: Text("Reset Time -"),
-                                                onPressed: () {
-                                                  setRedScore(0);
-                                                  setGreenScore(0);
-                                                  mqtt.publish(
-                                                      "/general", "resetTime-");
-                                                  Navigator.pop(context);
-                                                },
-                                              ),
-                                              Padding(
-                                                padding: const EdgeInsets
-                                                    .fromLTRB(8, 0, 0, 0),
-                                                child: RaisedButton(
-                                                  child: Text("Reset Time +"),
-                                                  onPressed: () {
-                                                    setRedScore(0);
-                                                    setGreenScore(0);
-                                                    mqtt.publish(
-                                                        "/general",
-                                                        "resetTime+");
-                                                    Navigator.pop(context);
-                                                  },
-                                                ),
-                                              ),
-                                            ],
-                                          )
-                                        ],
-                                      ),
-                                    );
-                                  });
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(0, 8, 0, 8),
-                              child: Text(
-                                "Reset",
-                                style: TextStyle(fontSize: 24),
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(0, 20, 0, 3),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.amber)),
-                              child: FlatButton(
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                      0, 25, 0, 25),
-                                  child: Text(
-                                    "Pause",
-                                    style:
-                                    TextStyle(
-                                        fontSize: 24, color: Colors.amber),
-                                  ),
-                                ),
-                                onPressed: () {
-                                  mqtt.publish("/general", "pause");
-                                },
-                              ),
-                            ),
-                          )
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(18.0),
+                  ),
+
+                  //Central Column
+                  centralColumn,
+
+                  //Green Score
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 0),
                       child: Column(
                         children: <Widget>[
                           Container(
@@ -332,7 +511,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           ),
                           Text("$_greenScore",
                               style: TextStyle(
-                                  fontSize: 100, color: Colors.green)),
+                                  fontSize: 97, color: Colors.green)),
                           Container(
                             height: 100,
                             width: 100,
@@ -348,15 +527,273 @@ class _MyHomePageState extends State<MyHomePage> {
                         ],
                       ),
                     ),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: getStartStopButton()),
+              )
+            ],
+          );
+          break;
+        case 1:
+          appBarTitle = Text("The Fencing Box - Matches");
+
+          Widget mainContent;
+          switch(matchMode){
+            case "None":
+              mainContent = Container();
+              break;
+            case "Poole":
+              mainContent = Center(
+                child: Text("Feature Coming Soon!",
+                  style: TextStyle(fontSize: 32, color: Colors.red),
+                )
+              );
+              break;
+            case "Team Match":
+              mainContent = Column(
+                children: <Widget>[
+                  Text("Team Names",
+                    style: TextStyle(fontSize: 32),
+                  ),
+                  Flex(
+                    direction: Axis.horizontal,
+                    children: <Widget>[
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Column(
+                            children: <Widget>[
+                              Text("Left Team",
+                                style: TextStyle(fontSize: 24),
+                              ),
+                              TextFormField(
+                                initialValue: leftNames[0],
+                                decoration: InputDecoration(
+                                    hintText: 'Name 1'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    leftNames[0] = text;
+                                    sendNames();
+                                  });
+                                },
+                              ),
+                              TextFormField(
+                                initialValue: leftNames[1],
+                                decoration: InputDecoration(
+                                    hintText: 'Name 2'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    leftNames[1] = text;
+                                    sendNames();
+                                  });
+                                },
+                              ),
+                              TextFormField(
+                                initialValue: leftNames[2],
+                                decoration: InputDecoration(
+                                    hintText: 'Name 3'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    leftNames[2] = text;
+                                    sendNames();
+                                  });
+                                },
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Column(
+                            children: <Widget>[
+                              Text("Right Team",
+                                style: TextStyle(fontSize: 24),
+                              ),
+                              TextFormField(
+                                initialValue: rightNames[0],
+                                decoration: InputDecoration(
+                                  hintText: 'Name 1'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    rightNames[0] = text;
+                                    sendNames();
+                                  });
+                                },
+                              ),
+                              TextFormField(
+                                initialValue: rightNames[1],
+                                decoration: InputDecoration(
+                                    hintText: 'Name 2'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    rightNames[1] = text;
+                                    sendNames();
+                                  });
+                                },
+                              ),
+                              TextFormField(
+                                initialValue: rightNames[2],
+                                decoration: InputDecoration(
+                                    hintText: 'Name 3'
+                                ),
+                                onChanged: (text) {
+                                  setState(() {
+                                    rightNames[2] = text;
+                                    sendNames();
+                                  });
+                                },
+                              )
+                            ],
+                          ),
+                        ),
+                      )
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Text("Matchups",
+                      style: TextStyle(fontSize: 32),
+                    ),
+                  ),
+                  SizedBox(
+                    height:150,
+                    child: ListView(
+                      children: <Widget>[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: <Widget> [
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: stringArrayToTextWidgets(distributeList<String>(leftNames, leftMatchOrder.map((x){return x-1;}).toList()), TextStyle(fontSize: 18)),
+                                ),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Column(
+                                children: intArrayToTextWidgets(leftMatchOrder, TextStyle(fontSize: 18))
+                              ),
+                            ),
+                            Column(
+                              children: stringArrayToTextWidgets(List.filled(leftMatchOrder.length, "v"), TextStyle(fontSize: 18))
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Column(
+                                children: intArrayToTextWidgets(rightMatchOrder, TextStyle(fontSize: 18)),
+                              ),
+                            ),
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: stringArrayToTextWidgets(distributeList<String>(rightNames, rightMatchOrder.map((x){return x-1;}).toList()), TextStyle(fontSize: 18)),
+                                ),
+                              ),
+                            ),
+                          ]
+                        ),
+                      ],
+                    ),
+                  )
+                ],
+              );
+              break;
+          }
+
+          appBody = Container(
+            color: Colors.white,
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text("Select Format:",
+                        style: TextStyle(fontSize: 24),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: DropdownButton<String>(
+                        value: matchMode,
+                        icon: Icon(Icons.arrow_downward),
+                        underline: Container(
+                          height: 2,
+                          color: Colors.deepPurpleAccent,
+                        ),
+                        onChanged: (String newValue) {
+                          setState(() {
+                            matchMode = newValue;
+                          });
+                        },
+                        items: <String>['None', 'Poole', 'Team Match']
+                            .map<DropdownMenuItem<String>>((String value) {
+                          return DropdownMenuItem<String>(
+                            value: value,
+                            child: Text(value, style: TextStyle(fontSize: 24)),
+                          );
+                        })
+                            .toList(),
+                      ),
+                    ),
                   ],
                 ),
-                Expanded(
-                  child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: getStartStopButton()),
-                )
+                mainContent
               ],
-            )),
+            ),
+          );
+          break;
+        case 2:
+          appBarTitle = Text("The Fencing Box - Settings");
+          appBody = ModeSelector(mqtt: mqtt);
+          break;
+      }
+
+      return Scaffold(
+        resizeToAvoidBottomInset: false,
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          title: appBarTitle,
+        ),
+        body: appBody,
+        bottomNavigationBar: BottomNavigationBar(
+         currentIndex: _navBarIndex,
+         onTap: (index) {
+           setState(() {
+             _navBarIndex = index;
+           });
+         },
+         items: [
+           BottomNavigationBarItem(
+             icon: Icon(Icons.play_arrow),
+             title: Text("Referee"),
+           ),
+           BottomNavigationBarItem(
+             icon: Icon(Icons.table_chart),
+             title: Text("Formats"),
+           ),
+           BottomNavigationBarItem(
+             icon: Icon(Icons.settings),
+             title: Text("Box Settings"),
+           )
+         ],
+        ),
       );
     } else if(failed){
       return Scaffold(
@@ -465,4 +902,140 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
   }
+
+  List<Widget> intArrayToTextWidgets(List<int> sList, TextStyle style){
+    List<Widget> out = [];
+    for(int i in sList){
+      out.add(Text(i.toString(), style: style));
+    }
+    return out;
+  }
+
+  List<Widget> stringArrayToTextWidgets(List<String> sList, TextStyle style){
+    List<Widget> out = [];
+    for(String s in sList){
+      out.add(Text(s, style: style,
+        overflow: TextOverflow.ellipsis,
+      ));
+    }
+    return out;
+  }
+
+  List<T> distributeList<T>(List<T> list, List<int> order){
+    // Creates a new list from a list with the index order specified
+    List<T> out = [];
+    for(int i in order){
+      out.add(list[i]);
+    }
+    return out;
+  }
+  
+  void sendNames(){
+    mqtt.publish("/name/red", leftNames[leftMatchOrder[currentMatch] - 1]);
+    mqtt.publish("/name/green", rightNames[rightMatchOrder[currentMatch] - 1]);
+  }
+
+  void nextRound(){
+    currentMatch++;
+    sendNames();
+  }
+
+  void previousRound(){
+    currentMatch--;
+    sendNames();
+  }
+
+  void notifyVibrate() async{
+    if(await Vibration.hasVibrator()){
+      if (await Vibration.hasCustomVibrationsSupport()) {
+        Vibration.vibrate(pattern: [0,1000,500,1000,500,1000]);
+      } else {
+        Vibration.vibrate();
+        await Future.delayed(Duration(milliseconds: 500));
+        Vibration.vibrate();
+      }
+    }
+  }
+
+  void _timerFinished(){
+    if(matchMode == "Team Match"){
+      showNextMatchDialog();
+    }else{
+      notifyVibrate();
+    }
+  }
+
+  Future<void> showNextMatchDialog() async{
+
+    notifyVibrate();
+
+    if(currentMatch == 8){
+      return showDialog<void>(
+          context: context,
+          builder: (BuildContext context){
+            return AlertDialog(
+              title: Text("Match Done!"),
+              content: SingleChildScrollView(
+                  child: Text("Match Finished!")
+              ),
+              actions: <Widget>[
+                FlatButton(
+                  child: Text("Done"),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            );
+          }
+      );
+    }
+
+    ListBody content;
+    if(currentMatch == 7){
+      content = ListBody(
+        children: <Widget>[
+          Text("Round Over!"),
+          Text("Next Round: ${leftNames[leftMatchOrder[8] - 1]} v ${rightNames[rightMatchOrder[8] - 1]}")
+        ],
+      );
+    }else{
+      content = ListBody(
+        children: <Widget>[
+          Text("Round Over!"),
+          Text("Next Round: ${leftNames[leftMatchOrder[currentMatch+1] - 1]} v ${rightNames[rightMatchOrder[currentMatch+1] - 1]}"),
+          Text("Getting Ready: ${leftNames[leftMatchOrder[currentMatch+2] - 1]} v ${rightNames[rightMatchOrder[currentMatch+2] - 1]}")
+        ],
+      );
+    }
+
+    return showDialog<void>(
+      context: context,
+      builder: (BuildContext context){
+        return AlertDialog(
+          title: Text("Next Round"),
+          content: SingleChildScrollView(
+            child: content
+          ),
+          actions: <Widget>[
+            FlatButton(
+              child: Text("Cancel"),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            FlatButton(
+              child: Text("Next Round"),
+              onPressed: () {
+                nextRound();
+                mqtt.publish("/general", "resetTime");
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      }
+    );
+  }
+
 }
